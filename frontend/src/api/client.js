@@ -101,7 +101,7 @@ export const api = {
   // the same key with the same body returns the same order instead of creating another.
   createOrder: async ({ amount, currency = 'USD', description, idempotencyKey }, opts) => {
     if (!HAS_LIVE_PAYMENTS) throw new ApiError('PayPal checkout needs the backend. Set VITE_API_MODE=hybrid or live.', { code: 'MOCK_MODE' });
-    const res = await request('/payments/orders', {
+    const res = await request('/paypal/orders', {
       ...opts,
       method: 'POST',
       body: { amount: String(amount), currency, description },
@@ -112,6 +112,23 @@ export const api = {
     const orderId = res?.orderId ?? res?.payment?.orderId;
     if (!approvalUrl || !orderId) throw new ApiError('The server did not return a PayPal approval link.', { code: 'NO_APPROVAL_URL' });
     return { orderId, approvalUrl };
+  },
+  // Captures an order AFTER the buyer approved it on PayPal. Safe to call more than once:
+  // the key is derived from the order id, so a refresh / double effect never captures twice.
+  // Resolves to { outcome, verified, captureId, payment } where outcome is
+  //   captured | pending | unknown   (declined / failed / not-approved arrive as an ApiError)
+  captureOrder: async (orderId, opts) => {
+    if (!HAS_LIVE_PAYMENTS) throw new ApiError('Capturing a payment needs the backend. Set VITE_API_MODE=hybrid or live.', { code: 'MOCK_MODE' });
+    const res = await request(`/paypal/orders/${enc(orderId)}/capture`, {
+      ...opts,
+      method: 'POST',
+      body: {},
+      headers: { 'Idempotency-Key': `capture-${orderId}` },
+      live: true,
+    });
+    const payment = adaptPayment(res);
+    rememberPayment(payment); // lets the mocked case flow link to this real sandbox order
+    return { outcome: res.outcome ?? 'unknown', verified: Boolean(res.verified), captureId: res.captureId ?? payment.capture_id ?? null, payment };
   },
   getPayment: async (id, opts) => {
     if (API_MODE === 'mock' || (API_MODE === 'hybrid' && hasMockPayment(id))) {

@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const { PaymentError } = require('./paypalErrors');
 const { deriveRequestId } = require('./idempotency');
-const { normalizeOrder, normalizeCapture, toCaseTransaction } = require('./paymentState');
+const { normalizeOrder, normalizeCapture, toCaseTransaction, isTerminal } = require('./paymentState');
 
 const ID_RE = /^[A-Za-z0-9_-]{5,64}$/;
 const KEY_RE = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -133,7 +133,13 @@ function createPaymentService({ client, store, config }) {
     const storeKey = key ? `capture:key:${key}` : `capture:order:${orderId}`;
     const requestId = key ? deriveRequestId('capture', `${key}:${orderId}`) : crypto.randomUUID();
     const result = await store.run(storeKey, { orderId }, () => doCapture(orderId, requestId));
-    return mark(result);
+    const marked = mark(result);
+    // A duplicate request must never capture twice, but it also must not keep serving an old
+    // "pending" answer for 24 h: ask PayPal for the real state (no second capture is sent).
+    if (marked.meta.idempotentReplay && !isTerminal(marked.payment.state)) {
+      return build(await fetchOrder(orderId), { idempotentReplay: true, reconciled: true });
+    }
+    return marked;
   }
 
   async function getOrder(orderId) {

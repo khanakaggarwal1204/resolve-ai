@@ -117,4 +117,25 @@ function toCaseTransaction(payment) {
   };
 }
 
-module.exports = { STATES, orderState, captureState, isTerminal, normalizeOrder, normalizeCapture, toCaseTransaction };
+/**
+ * What the app should tell the buyer after a capture attempt (derived from the normalized state):
+ *   captured  PayPal confirms the money was captured (capture status COMPLETED)
+ *   pending   PayPal accepted it but it is not final yet (e.g. under review): check again later
+ *   failed    declined / failed / voided: nothing was captured
+ *   refunded  was captured, has since been (partly) refunded
+ *   unknown   anything else (e.g. order still not approved): do not assume success
+ */
+function captureOutcome(payment) {
+  switch (payment && payment.state) {
+    case STATES.COMPLETED: return 'captured';
+    case STATES.PENDING: return 'pending';
+    case STATES.DECLINED:
+    case STATES.FAILED:
+    case STATES.VOIDED: return 'failed';
+    case STATES.REFUNDED:
+    case STATES.PARTIALLY_REFUNDED: return 'refunded';
+    default: return 'unknown';
+  }
+}
+
+module.exports = { captureOutcome, STATES, orderState, captureState, isTerminal, normalizeOrder, normalizeCapture, toCaseTransaction };

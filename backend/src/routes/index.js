@@ -4,8 +4,11 @@ const express = require('express');
 const { registerPaymentRoutes } = require('./payments.routes');
 
 const router = express.Router();
+const payments = registerPaymentRoutes(express.Router());
 
-// POST /payments/orders, POST /payments/orders/:id/capture, GET /payments/orders/:id, GET /payments/captures/:id
-router.use('/payments', registerPaymentRoutes(express.Router()));
+// POST /orders, POST /orders/:id/capture, GET /orders/:id, GET /captures/:id
+// Served under both prefixes: /api/paypal/... (documented API) and /api/payments/... (existing).
+router.use('/paypal', payments);
+router.use('/payments', payments);
 
 module.exports = router;

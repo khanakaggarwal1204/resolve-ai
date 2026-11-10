@@ -20,10 +20,12 @@ Express API. PayPal (sandbox) is called **only** from here; the browser never se
 
 ## Endpoints
 
+Every `/api/paypal/...` route is also served under `/api/payments/...`.
+
 | Method | Path | Notes |
 | --- | --- | --- |
 | POST | `/api/payments/orders` | body `{ amount, currency?, description?, referenceId?, merchantLabel? }`, header `Idempotency-Key` required. Returns `{ orderId, approvalUrl, payment, transaction, meta }` (201, or 200 on replay) |
-| POST | `/api/payments/orders/:orderId/capture` | header `Idempotency-Key` optional |
+| POST | `/api/paypal/orders/:orderId/capture` | header `Idempotency-Key` optional. See "Capture" below |
 | GET | `/api/payments/orders/:orderId` | |
 | GET | `/api/payments/captures/:captureId` | |
 | GET | `/health` | |
@@ -48,4 +50,24 @@ curl -X POST http://localhost:4000/api/payments/orders \
   -d '{"amount":"50.00","currency":"USD","description":"Sandbox product"}'
 ```
 
-Capturing the approved order (`POST /api/payments/orders/:orderId/capture`) already exists; a return page that calls it is not built yet.
+## Capture flow
+
+1. After the buyer approves, PayPal redirects to `PAYPAL_RETURN_URL?token=<ORDER_ID>&PayerID=...` (`/checkout/return` in the frontend).
+2. The page calls `POST /api/paypal/orders/:orderId/capture` once, with a stable `Idempotency-Key` (`capture-<orderId>`).
+3. The backend asks PayPal to capture. PayPal itself refuses an order the buyer has not approved (`409 ORDER_NOT_APPROVED`, nothing is charged).
+4. The response says what really happened:
+
+| Outcome | HTTP | Meaning |
+| --- | --- | --- |
+| `captured` (`verified: true`, `captureId` set) | 201 (200 on duplicate) | PayPal confirms the capture is COMPLETED |
+| `pending` | 202 | accepted but not final; call again, the backend re-checks PayPal and never captures twice |
+| `unknown` | 202 | PayPal did not confirm a capture; do not assume success or failure |
+| declined / failed | 402 `PAYMENT_DECLINED` / `PAYMENT_FAILED` | nothing captured |
+| not approved | 409 `ORDER_NOT_APPROVED` | buyer has not approved yet |
+| timeout / network | 502/504 with `outcome_unknown: true` | the backend first asks PayPal what happened; if it still cannot tell, the error says so |
+
+Duplicate protection (three layers): an in-memory idempotency store, a `PayPal-Request-Id` derived from the key, and `ORDER_ALREADY_CAPTURED` recovery (reports the real state instead of failing).
+
+```bash
+curl -X POST http://localhost:4000/api/paypal/orders/<ORDER_ID>/capture -H 'Idempotency-Key: capture-<ORDER_ID>'
+```

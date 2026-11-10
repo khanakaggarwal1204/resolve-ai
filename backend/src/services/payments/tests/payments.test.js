@@ -247,6 +247,41 @@ let step = 0; const ok = (msg) => console.log(`${++step} ok ${msg}`);
   assert.strictEqual(posts(h).length, 2);
   ok('create order: $50 -> orderId + approvalUrl at top level, redirect body, missing approval link is an error and not cached');
 
+  // 13c. capture outcomes over HTTP: captured 201, pending 202 (and re-checked on replay), declined 402, not approved 409, unknown 202
+  const capReq = (id = 'ORD123ABC') => ({ params: { orderId: id }, headers: { 'idempotency-key': `capture-${id}` }, body: {} });
+  const run = async (service) => { const r = mkRes(); let err = null; await createPaymentHandlers(service).captureOrder(capReq(), r, (e) => { err = e; }); return { r, err }; };
+
+  h = harness({ route: (call) => (call.method === 'POST' ? reply(201, orderCaptured('COMPLETED')) : reply(404, {})) });
+  let out2 = await run(h.service);
+  assert.strictEqual(out2.r.statusCode, 201); assert.strictEqual(out2.r.body.outcome, 'captured'); assert.strictEqual(out2.r.body.verified, true);
+  assert.strictEqual(out2.r.body.captureId, 'CAP456'); assert.strictEqual(out2.r.body.orderId, 'ORD123ABC');
+  out2 = await run(h.service); // duplicate request
+  assert.strictEqual(out2.r.statusCode, 200); assert.strictEqual(out2.r.headers['Idempotent-Replayed'], 'true'); assert.strictEqual(posts(h, '/v2/checkout/orders/ORD123ABC/capture').length, 1);
+
+  let captureStatus = 'PENDING';
+  h = harness({ route: (call) => (call.method === 'POST' ? reply(201, orderCaptured('PENDING')) : reply(200, orderCaptured(captureStatus))) });
+  out2 = await run(h.service);
+  assert.strictEqual(out2.r.statusCode, 202); assert.strictEqual(out2.r.body.outcome, 'pending'); assert.strictEqual(out2.r.body.verified, false);
+  out2 = await run(h.service); // still pending at PayPal -> still 202, no second capture sent
+  assert.strictEqual(out2.r.statusCode, 202);
+  captureStatus = 'COMPLETED'; // PayPal finished processing
+  out2 = await run(h.service);
+  assert.strictEqual(out2.r.statusCode, 200); assert.strictEqual(out2.r.body.outcome, 'captured'); assert.strictEqual(out2.r.body.verified, true); assert.strictEqual(out2.r.body.meta.reconciled, true);
+  assert.strictEqual(posts(h, '/v2/checkout/orders/ORD123ABC/capture').length, 1);
+
+  h = harness({ route: () => reply(201, orderCaptured('DECLINED')) });
+  out2 = await run(h.service);
+  assert.ok(out2.err instanceof PaymentError); assert.strictEqual(out2.err.code, 'PAYMENT_DECLINED'); assert.strictEqual(out2.err.httpStatus, 402);
+
+  h = harness({ route: () => ppError(422, 'ORDER_NOT_APPROVED', 'Payer has not approved payment') });
+  out2 = await run(h.service);
+  assert.ok(out2.err instanceof PaymentError); assert.strictEqual(out2.err.code, 'ORDER_NOT_APPROVED'); assert.strictEqual(out2.err.httpStatus, 409);
+
+  h = harness({ route: (call) => (call.method === 'POST' ? reply(201, orderApproved()) : reply(200, orderApproved())) }); // odd answer: no capture in the response
+  out2 = await run(h.service);
+  assert.strictEqual(out2.r.statusCode, 202); assert.strictEqual(out2.r.body.outcome, 'unknown'); assert.strictEqual(out2.r.body.verified, false);
+  ok('capture over HTTP: captured 201 + verified, duplicate 200, pending 202 re-checked on replay, declined 402, not approved 409, unknown 202');
+
   // 14. secrets never leak into errors
   h = harness({ route: () => reply(401, { name: 'AUTHENTICATION_FAILURE' }) });
   const leak = await rejects(() => h.service.getOrder('ORD123ABC'), 'PAYPAL_AUTH_FAILED');
