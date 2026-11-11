@@ -63,3 +63,7 @@ Enums (`issue_type`, `status`, `source_mode`) live in `src/constants.js`, matchi
 - No auth screens; assumes the backend identifies the buyer (cookie/session).
 - Evidence is metadata only (no file upload), per MVP.
 - No automated tests yet for the frontend.
+
+## Merchant portal (Kashish)
+
+Routes: `/merchant` (inbox) and `/merchant/cases/:caseId` (review). Code is in `src/merchant/`. In `mock` mode the merchant screens read the same in-memory cases the buyer flow creates (file a case as a buyer, then open Merchant). In `live` mode pick a demo user from the top bar (sent as `X-Demo-User`; demo only). Merchant actions update the app record only and never refund or open a PayPal dispute.

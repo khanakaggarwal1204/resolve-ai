@@ -1,0 +1,33 @@
+/* Merchant portal styles. Reuses the buyer app's tokens from ../styles.css. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.filters .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 12px; margin-bottom: 8px; }
+.filters label { font-size: .85rem; font-weight: 600; color: var(--muted); display: block; }
+.filters select, .filters input { margin: 4px 0 0; }
+
+.inbox-item { margin: 10px 0; }
+.inbox-title { margin: 0; }
+.inbox-order { margin: .35rem 0; }
+.inbox-item p { margin: .35rem 0; }
+
+.dup-list { list-style: none; padding: 0; margin: 0; }
+.dup-list > li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.dup-list > li:last-child { border-bottom: 0; }
+.dup-list ul { margin: .25rem 0; padding-left: 1.1rem; }
+
+.evidence-list { list-style: none; padding: 0; margin: 0; }
+.evidence-list li { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--border); }
+
+.actions { margin-top: 10px; }
+.btn-danger { color: var(--bad); }
+.btn-danger:hover:not(:disabled) { background: #fdecea; color: var(--bad); }
+.notice-ok { background: #e6f4ec; border: 1px solid #b9dfc9; }
+
+.audit-list { list-style: none; padding: 0; margin: 10px 0 0; }
+.audit-list li { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); }
+
+.demo-user { font: inherit; width: auto; margin: 0; padding: 3px 8px; border-radius: 8px; background: #fff; color: var(--text); }
+.topnav { display: flex; align-items: center; gap: 14px; }
+.topnav a { color: #fff; text-decoration: none; font-weight: 600; font-size: .95rem; padding: 4px 2px; border-bottom: 2px solid transparent; }
+.topnav a.active { border-bottom-color: #fff; }
+@media (max-width: 560px) { .topbar-inner { height: auto; padding: 8px 16px; flex-wrap: wrap; gap: 6px; } }

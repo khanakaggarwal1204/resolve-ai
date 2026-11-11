@@ -126,9 +126,97 @@ const caseView = (c) => ({
   audit: audit[c.id] || [],
 });
 
+
+// ---- Merchant portal mock (Kashish). Mirrors backend/src/services/merchantService.js. ----
+const MERCHANT_TRANSITIONS = {
+  draft: [],
+  submitted: ['under_review', 'awaiting_information', 'closed'],
+  under_review: ['awaiting_information', 'resolved', 'closed'],
+  awaiting_information: ['under_review', 'resolved', 'closed'],
+  resolved: ['closed'],
+  closed: [],
+};
+const MERCHANT_EVENT = { under_review: 'merchant_reviewed', awaiting_information: 'merchant_requested_information', resolved: 'case_resolved', closed: 'case_closed' };
+const merchantDrafts = {}; // caseId -> merchant response draft
+const DUP_NOTE = 'Possible-duplicate hints are probabilistic. They compare simple fields and wording, and are not a judgment that a case is a duplicate or that anyone acted dishonestly.';
+
+function mockPriority(c) {
+  if (['resolved', 'closed'].includes(c.status)) return 'low';
+  if (c.status === 'submitted' && Date.now() - Date.parse(c.created_at) > 72 * 3600e3) return 'high';
+  return 'normal';
+}
+function mockDuplicates(c) {
+  return cases
+    .filter((o) => o.id !== c.id && o.status !== 'draft')
+    .map((o) => {
+      const reasons = [];
+      if (o.payment_reference_id === c.payment_reference_id) reasons.push({ code: 'same_payment_reference', label: 'Another case references the same payment' });
+      if (o.issue_type === c.issue_type) reasons.push({ code: 'same_issue_type', label: 'The same buyer reported the same issue type' });
+      return reasons.length ? { case_id: o.id, status: o.status, issue_type: o.issue_type, source_mode: o.source_mode, created_at: o.created_at, reasons, confidence: reasons.length > 1 ? 'medium' : 'low' } : null;
+    })
+    .filter(Boolean);
+}
+function merchantListItem(c) {
+  const p = findPayment(c.payment_reference_id);
+  const dups = mockDuplicates(c);
+  return {
+    id: c.id, status: c.status, issue_type: c.issue_type, priority: mockPriority(c), source_mode: c.source_mode,
+    buyer: { id: 'user_buyer_demo', display_name: 'Demo buyer' },
+    payment: { id: p.id, paypal_order_id: p.paypal_order_id, amount: p.amount, currency: p.currency, merchant_label: p.merchant_label, source_mode: p.source_mode },
+    evidence_count: (evidence[c.id] || []).length, has_recommendation: Boolean(recs[c.id]),
+    possible_duplicate: dups.length ? { count: dups.length, confidence: dups[0].confidence, reasons: [...new Set(dups.flatMap((d) => d.reasons.map((r) => r.code)))], label: 'Possible duplicate: review the related case' } : null,
+    created_at: c.created_at, updated_at: c.updated_at,
+  };
+}
+function merchantView(c) {
+  const base = caseView(c);
+  return {
+    ...base,
+    case: {
+      ...base.case, priority: mockPriority(c), buyer: { id: 'user_buyer_demo', display_name: 'Demo buyer' },
+      merchant_draft: merchantDrafts[c.id] ?? '', allowed_transitions: MERCHANT_TRANSITIONS[c.status] || [],
+      narrative_source_mode: c.source_mode === 'synthetic_demo' ? 'synthetic_demo' : 'user_provided_unverified',
+    },
+    evidence_gaps: GAPS[c.issue_type].filter((g) => !(evidence[c.id] || []).some((e) => e.description.toLowerCase().includes(g.split(' ')[0].toLowerCase()))).map((label) => ({ type: 'gap', label, source_mode: 'app_owned' })),
+    duplicate_hints: { note: DUP_NOTE, items: mockDuplicates(c) },
+  };
+}
+function mockMerchantRequest(method, parts, query, body) {
+  if (method === 'GET' && parts[1] === 'cases' && !parts[2]) {
+    let items = cases.filter((c) => c.status !== 'draft').map(merchantListItem);
+    const status = (query.get('status') || '').split(',').filter(Boolean);
+    if (status.length) items = items.filter((i) => status.includes(i.status));
+    for (const f of ['priority', 'issue_type']) if (query.get(f)) items = items.filter((i) => i[f] === query.get(f));
+    const q = (query.get('q') || '').toLowerCase();
+    if (q) items = items.filter((i) => [i.id, i.payment.paypal_order_id, i.payment.merchant_label].some((v) => String(v).toLowerCase().includes(q)));
+    const rank = { high: 0, normal: 1, low: 2 };
+    items.sort((a, b) => rank[a.priority] - rank[b.priority] || Date.parse(b.updated_at) - Date.parse(a.updated_at));
+    const counts = items.reduce((acc, i) => ({ ...acc, [i.status]: (acc[i.status] || 0) + 1 }), {});
+    return { items, total: items.length, counts };
+  }
+  if (parts[1] === 'cases' && parts[2]) {
+    const c = findCase(decodeURIComponent(parts[2]));
+    if (method === 'GET') return merchantView(c);
+    if (method === 'PATCH') {
+      if (c.status === 'closed') throw new ApiError('This case is closed and can no longer be changed.', { code: 'CASE_CLOSED', status: 409 });
+      if (body.status && body.status !== c.status) {
+        if (!MERCHANT_TRANSITIONS[c.status].includes(body.status)) throw new ApiError(`A ${c.status.replace(/_/g, ' ')} case cannot move to ${body.status.replace(/_/g, ' ')}.`, { code: 'INVALID_TRANSITION', status: 409 });
+        const draft = body.merchant_draft ?? merchantDrafts[c.id] ?? '';
+        if (body.status === 'awaiting_information' && !draft.trim()) throw new ApiError('Write the message to the buyer before requesting more information.', { code: 'MESSAGE_REQUIRED', status: 422 });
+      }
+      if (body.merchant_draft !== undefined && body.merchant_draft !== (merchantDrafts[c.id] ?? '')) { merchantDrafts[c.id] = body.merchant_draft; log(c.id, 'merchant_draft_saved'); }
+      if (body.status && body.status !== c.status) { c.status = body.status; log(c.id, MERCHANT_EVENT[body.status]); }
+      c.updated_at = now();
+      return { ...merchantView(c), meta: { idempotentReplay: false, changed: true } };
+    }
+  }
+  throw new ApiError('No mock for this merchant route.', { code: 'NOT_FOUND', status: 404 });
+}
+
 export async function mockRequest(method, path, body) {
   await delay(path.endsWith('/analyze') || path.endsWith('/draft-response') ? 1100 : 450);
   const parts = path.split('?')[0].split('/').filter(Boolean);
+  if (parts[0] === 'merchant') return mockMerchantRequest(method, parts, new URLSearchParams(path.split('?')[1] || ''), body);
 
   if (method === 'GET' && parts[0] === 'payments' && !parts[1]) return payments;
   if (method === 'GET' && parts[0] === 'payments') {

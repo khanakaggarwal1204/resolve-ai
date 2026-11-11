@@ -30,7 +30,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, signal, timeoutMs = 20000, live = false } = {}) {
+async function request(path, { method = 'GET', body, signal, timeoutMs = 20000, live = false, headers = {} } = {}) {
   // `live` marks calls the real backend already implements (payments).
   if (API_MODE === 'mock' || (API_MODE === 'hybrid' && !live)) return mockRequest(method, path, body);
 
@@ -46,7 +46,7 @@ async function request(path, { method = 'GET', body, signal, timeoutMs = 20000, 
     try {
       res = await fetch(`${BASE}${path}`, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Demo-User': getDemoUser(), ...headers },
         body: body ? JSON.stringify(body) : undefined,
         credentials: 'include',
         signal: ctrl.signal,
@@ -82,6 +82,21 @@ async function request(path, { method = 'GET', body, signal, timeoutMs = 20000, 
 
 const enc = encodeURIComponent;
 
+// Demo-only identity. The backend (DEMO_MODE=true) trusts this header; it is NOT real authentication.
+export const DEMO_USERS = [
+  { id: 'user_merchant_demo', label: 'Demo Store (merchant)', role: 'merchant' },
+  { id: 'user_merchant_other', label: 'Other Shop (merchant)', role: 'merchant' },
+  { id: 'user_buyer_alice', label: 'Alice Demo (buyer)', role: 'buyer' },
+  { id: 'user_buyer_ben', label: 'Ben Demo (buyer)', role: 'buyer' },
+];
+const DEMO_USER_KEY = 'resolve_demo_user';
+export function getDemoUser() {
+  try { return localStorage.getItem(DEMO_USER_KEY) || 'user_merchant_demo'; } catch { return 'user_merchant_demo'; }
+}
+export function setDemoUser(id) {
+  try { localStorage.setItem(DEMO_USER_KEY, id); } catch { /* storage unavailable: keep the default user */ }
+}
+
 const mockOnly = (method, path, body) => mockRequest(method, path, body);
 
 export const api = {
@@ -114,6 +129,16 @@ export const api = {
   generateDraft: (id) => request(`/cases/${enc(id)}/draft-response`, { method: 'POST', timeoutMs: 60000 }),
   // Saves an app-owned action only; never a refund/dispute. Uses an idempotency key.
   recordAction: (id, payload) => request(`/cases/${enc(id)}/actions`, { method: 'POST', body: payload }),
+  // --- Merchant portal (Kashish). Hybrid mode keeps these mocked, like the other case routes. ---
+  listMerchantCases: (params = {}, opts) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '')).toString();
+    return request(`/merchant/cases${qs ? `?${qs}` : ''}`, opts);
+  },
+  getMerchantCase: async (id, opts) => adaptCaseView(await request(`/merchant/cases/${enc(id)}`, opts)),
+  // patch = { status?, merchant_draft? }. App record only: never a refund or PayPal dispute action.
+  updateMerchantCase: async (id, patch, idempotencyKey) =>
+    adaptCaseView(await request(`/merchant/cases/${enc(id)}`, { method: 'PATCH', body: patch, headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {} })),
+
   // ASSUMPTION: evidence metadata endpoint. Not in the plan's 4.2 yet. Agree with Kashish.
   addEvidence: (id, payload) => request(`/cases/${enc(id)}/evidence`, { method: 'POST', body: payload }),
 };
